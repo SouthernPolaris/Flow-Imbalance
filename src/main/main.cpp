@@ -15,7 +15,7 @@
 
 #include "OrderBook.h"
 #include "OFI.h"
-#include "Predictor.h"
+#include "predictor/Predictor.h"
 #include <numeric>
 #include <algorithm>
 
@@ -38,7 +38,25 @@ int main(int argc, char** argv) {
     signal(SIGINT, sigint_handler);
     // const char* bind_addr = "0.0.0.0";
     int port = 9000;
-    if (argc > 1) port = std::atoi(argv[1]);
+    // parse minimal args: --mode=cpu|gpu and optional port positional or --port=<n>
+    Predictor::Mode requested_mode = Predictor::Mode::CPU;
+    for (int i = 1; i < argc; ++i) {
+        std::string a(argv[i]);
+        if (a.rfind("--mode=", 0) == 0) {
+            std::string m = a.substr(7);
+            if (m == "gpu" || m == "GPU" || m == "Gpu") requested_mode = Predictor::Mode::GPU;
+        } else if (a == "-m" && i + 1 < argc) {
+            std::string m(argv[++i]);
+            if (m == "gpu" || m == "GPU" || m == "Gpu") requested_mode = Predictor::Mode::GPU;
+        } else if (a.rfind("--port=", 0) == 0) {
+            port = std::atoi(a.substr(7).c_str());
+        } else {
+            // positional integer -> port
+            bool isnum = true;
+            for (char c : a) if (!std::isdigit((unsigned char)c)) { isnum = false; break; }
+            if (isnum) port = std::atoi(a.c_str());
+        }
+    }
 
     // Setup UDP socket
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -53,7 +71,12 @@ int main(int argc, char** argv) {
     std::cout << "Listening UDP on port " << port << "\n";
 
     OrderBook ob;
-    Predictor pred(0.15, 40.0);
+    Predictor pred(0.15, 40.0, requested_mode);
+    // Print requested/effective mode
+    std::string effective_mode = "CPU";
+    if (pred.get_mode() == Predictor::Mode::GPU && pred.gpu_available()) effective_mode = "GPU";
+    else if (pred.get_mode() == Predictor::Mode::GPU && !pred.gpu_available()) effective_mode = "GPU(requested->CPU fallback)";
+    std::cout << "Predictor mode: " << effective_mode << "\n";
     Stats stats;
 
     // minimal buffer for incoming UDP line
@@ -150,6 +173,8 @@ int main(int argc, char** argv) {
 
     print_stats(stats.lat_recv_decision_us, "recv->decision_us");
     print_stats(stats.lat_src_recv_us, "src->recv_us");
+
+    std::cout << "SUMMARY Predictor mode=" << effective_mode << "\n";
 
     close(sock);
     return 0;
